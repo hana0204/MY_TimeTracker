@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Life Log Pro</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div id="full-loading" class="full-loading" style="display: none;">
+        <div class="spinner"></div>
+        <p>同期中...</p>
+    </div>
+
+    <div class="app">
+        <header class="header-main">
+            <div class="date-display-wrapper" onclick="document.getElementById('date-selector').showPicker()">
+                <span id="date-text">----/--/-- (-)</span>
+                <input type="date" id="date-selector" style="position:absolute; opacity:0; pointer-events:none;">
+            </div>
+            <div class="header-time-area">
+                <div id="clock">00:00</div>
+                <button id="btn-go-today" class="btn-today">今日に戻る</button>
+            </div>
+        </header>
+
+        <main id="page-record" class="page active">
+            <div class="card timeline-card">
+                <div id="bar" class="timeline"></div>
+                <div id="timeline-scale" class="scale"></div>
+                <div id="daily-summary-details" class="summary-details"></div>
+            </div>
+
+            <div id="active-task-card" class="card active-card">
+                <div class="active-header-row">
+                    <div id="active-task-display">
+                        <span style="color:#aaa; font-size:13px;">記録は停止しています</span>
+                    </div>
+                    <div id="active-status-label" class="active-status-dot stopped">● Stopped</div>
+                </div>
+                <div id="recording-only-area" style="display:none;">
+                    <div class="timer-row">
+                        <div id="elapsed-timer" class="timer-display">00:00:00</div>
+                        <button id="btn-stop-task-round" class="btn-stop-round">終了</button>
+                    </div>
+                    <div class="memo-box">
+                        <input type="text" id="memo-input" placeholder="今のメモ...">
+                    </div>
+                </div>
+            </div>
+
+            <div id="main-controls">
+                <div id="category-grid" class="category-grid"></div>
+            </div>
+
+            <div class="card log-container" style="margin-top:10px;">
+                <!-- 案B：ミニバーSVGアイコン付きヘッダー -->
+                <div class="log-section-header">
+                    <div class="log-section-header-left">
+                        <svg class="log-section-icon" width="22" height="16" viewBox="0 0 22 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <rect x="0" y="6" width="5" height="10" rx="2" fill="#e8b7ad"/>
+                            <rect x="7" y="3" width="5" height="13" rx="2" fill="#e8b7ad" opacity="0.7"/>
+                            <rect x="14" y="0" width="5" height="16" rx="2" fill="#e8b7ad" opacity="0.45"/>
+                        </svg>
+                        <span class="log-section-title">Activity Timeline</span>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <span id="log-section-total" class="log-section-total"></span>
+                        <button class="btn-refresh" id="btn-refresh" title="更新">↻</button>
+                    </div>
+                </div>
+                <div id="log-list"></div>
+            </div>
+        </main>
+
+        <main id="page-stats" class="page">
+            <div class="card">
+                <div class="stats-tabs">
+                    <button class="stats-tab active" data-period="day">日</button>
+                    <button class="stats-tab" data-period="week">週</button>
+                    <button class="stats-tab" data-period="month">月</button>
+                </div>
+                <h3 id="stats-period-label" style="text-align:center; font-size:15px; margin: 15px 0;"></h3>
+                <div class="chart-container">
+                    <div id="pie-chart" class="pie-chart"></div>
+                </div>
+                <div id="stats-legend" class="stats-legend"></div>
+            </div>
+        </main>
+    </div>
+
+    <nav class="footer-nav">
+        <button id="tab-record-btn" class="footer-nav-item active">
+            <span class="footer-nav-icon">✍️</span>
+            <span class="footer-nav-label">記録</span>
+        </button>
+        <button id="tab-stats-btn" class="footer-nav-item">
+            <span class="footer-nav-icon">📊</span>
+            <span class="footer-nav-label">分析</span>
+        </button>
+    </nav>
+
+    <div id="sub-menu-overlay" class="sub-menu-overlay">
+        <div class="sub-menu-content">
+            <h3 id="sub-menu-title" style="font-size:16px;">内容を選択</h3>
+            <div id="sub-menu-list" class="sub-radial-list"></div>
+            <button id="btn-cancel-sub" class="btn-cancel-sub">キャンセル</button>
+        </div>
+    </div>
+
+    <script src="main.js"></script>
+</body>
+</html>

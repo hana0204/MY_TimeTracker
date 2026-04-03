@@ -1,0 +1,445 @@
+/* =========================================
+   1. 基本設定 & 共通変数
+   ========================================= */
+:root {
+    --bg-soft: #fcf9f7;
+    --card-bg: #ffffff;
+    --text-main: #5d5651;
+    --accent-warm: #e8b7ad;
+    --accent-soft: #f4e8e4;
+    --border-color: #eee4de;
+    --overlay-bg: rgba(93, 86, 81, 0.4);
+    --footer-h: 64px;
+}
+
+* {
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: 'Zen Maru Gothic', sans-serif;
+    background: var(--bg-soft);
+    color: var(--text-main);
+    line-height: 1.6;
+    overflow-x: hidden;
+}
+
+.app {
+    max-width: 480px;
+    margin: 0 auto;
+    padding: 0 16px calc(var(--footer-h) + 24px);
+    min-height: 100vh;
+}
+
+/* =========================================
+   2. ページアニメーション
+   ========================================= */
+.page { display: none; }
+.page.active {
+    display: block;
+    animation: fadeIn 0.3s ease-out forwards;
+}
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+/* =========================================
+   3. ヘッダー
+   ========================================= */
+.header-main {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 25px 0 5px;
+    gap: 8px;
+}
+
+.date-display-wrapper {
+    background: white;
+    padding: 6px 18px;
+    border-radius: 40px;
+    border: 1px solid var(--border-color);
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+#date-text { font-size: 15px; font-weight: 700; color: var(--text-main); }
+.date-display-wrapper::after {
+    content: "";
+    display: block;
+    width: 16px; height: 16px;
+    margin-left: 8px;
+    background-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="rgb(232, 183, 173)" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>');
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+}
+
+.header-time-area { height: 44px; display: flex; align-items: center; justify-content: center; }
+#clock { font-size: 42px; font-weight: 700; color: var(--accent-warm); line-height: 1; }
+.btn-today {
+    display: none;
+    background: var(--accent-warm); color: white; border: none;
+    padding: 8px 24px; border-radius: 20px; font-size: 13px; font-weight: 700;
+    cursor: pointer; font-family: 'Zen Maru Gothic', sans-serif;
+}
+
+/* =========================================
+   4. タイムラインバー
+   ========================================= */
+.card {
+    background: var(--card-bg);
+    border-radius: 24px;
+    padding: 20px;
+    margin-bottom: 12px;
+    border: 1px solid var(--border-color);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+}
+
+.timeline {
+    height: 24px;
+    background: #f5f5f5;
+    border-radius: 12px;
+    position: relative;
+    overflow: hidden;
+    margin-bottom: 4px;
+}
+.hour-grid {
+    position: absolute; top: 0; height: 100%;
+    width: 1px; background-color: rgba(0,0,0,0.08);
+}
+.segment {
+    position: absolute; height: 100%; top: 0;
+    opacity: 1;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; transition: all 0.3s;
+}
+
+/* タイムライン上のギャップセグメント */
+.gap-segment {
+    position: absolute;
+    height: 100%; top: 0;
+    cursor: pointer;
+    z-index: 10;
+    display: flex; align-items: center; justify-content: center;
+}
+.gap-segment-inner {
+    width: 100%; height: 100%;
+    background: repeating-linear-gradient(
+        90deg,
+        transparent,
+        transparent 3px,
+        rgba(232,183,173,0.4) 3px,
+        rgba(232,183,173,0.4) 6px
+    );
+    border: 1px dashed rgba(232,183,173,0.7);
+    border-radius: 2px;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.15s;
+    box-sizing: border-box;
+}
+.gap-segment:active .gap-segment-inner {
+    background: rgba(232,183,173,0.55);
+}
+.gap-segment-label {
+    font-size: 8px; font-weight: 700; color: #c07a6e;
+    white-space: nowrap; pointer-events: none;
+    text-shadow: 0 0 3px white;
+    overflow: hidden;
+}
+
+.scale {
+    display: flex; justify-content: space-between; padding: 4px 0;
+    font-size: 9px; color: #999; font-weight: 700;
+    position: relative; height: 20px;
+    border-bottom: 1px solid var(--bg-soft);
+    margin-bottom: 10px;
+}
+.scale span { position: absolute; transform: translateX(-50%); }
+
+/* サマリー */
+.summary-details {
+    display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px;
+}
+.summary-detail-item {
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 11px; font-weight: 700; padding: 6px 10px 6px 12px;
+    border-radius: 10px; background: var(--bg-soft);
+    position: relative; overflow: hidden;
+}
+.summary-detail-item::before {
+    content: "";
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 4px;
+    border-radius: 10px 0 0 10px;
+    background: var(--item-color, var(--accent-warm));
+}
+
+/* =========================================
+   5. 計測中カード
+   ========================================= */
+.active-card {
+    background: var(--accent-soft);
+    border: none;
+    padding: 12px 20px 16px;
+}
+
+/* 大項目・中項目・開始時刻を1行横並び */
+.active-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: nowrap;
+    gap: 6px;
+}
+.active-task-main {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: nowrap;
+    gap: 0;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+}
+.task-cat-label {
+    font-size: 13px; font-weight: 700;
+    color: var(--text-main); opacity: 0.75;
+    white-space: nowrap; flex-shrink: 0;
+}
+.task-separator {
+    color: var(--accent-warm); font-size: 11px;
+    margin: 0 4px; font-weight: 700; flex-shrink: 0;
+}
+.task-sub-label {
+    font-size: 16px; font-weight: 700;
+    color: var(--text-main);
+    white-space: nowrap; flex-shrink: 0;
+}
+/* 開始時刻バッジ：中項目の右隣 */
+.task-start-badge {
+    font-size: 12px;      /* タイムライン表示と同じサイズに */
+    color: #999;          /* タイムラインの時刻と同じ色調に */
+    font-weight: 700;
+    white-space: nowrap;
+    margin-left: 6px;
+    flex-shrink: 0;
+}
+
+.active-status-dot { font-size: 10px; font-weight: 700; flex-shrink: 0; }
+.active-status-dot.recording { color: #d48e7f; animation: blink 1.5s infinite; }
+.active-status-dot.stopped { color: #aaa; }
+@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+.timer-row {
+    display: flex; align-items: center; justify-content: center;
+    gap: 20px; margin: 10px 0 12px;
+}
+.timer-display { font-size: 42px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.btn-stop-round {
+    width: 64px; height: 64px; border-radius: 50%; border: none;
+    background: var(--accent-warm); color: white; font-weight: 700; cursor: pointer;
+    font-family: 'Zen Maru Gothic', sans-serif;
+}
+.memo-box input {
+    width: 100%; border: none; background: rgba(255,255,255,0.7);
+    padding: 12px; border-radius: 14px; text-align: center; font-size: 13px; outline: none;
+    font-family: 'Zen Maru Gothic', sans-serif;
+}
+
+/* =========================================
+   6. カテゴリグリッド
+   ========================================= */
+#main-controls { margin-bottom: 12px; }
+
+.category-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+}
+.cat-item {
+    display: flex; flex-direction: column; align-items: center;
+    padding: 10px 0;
+    border-radius: 20px;
+    font-size: 10px; font-weight: 700; cursor: pointer;
+    transition: transform 0.12s, box-shadow 0.12s;
+    position: relative; overflow: hidden; user-select: none;
+}
+.cat-item:active { transform: scale(0.93); }
+.ripple {
+    position: absolute; border-radius: 50%;
+    background: rgba(255,255,255,0.55);
+    transform: scale(0);
+    animation: rippleAnim 0.45s linear;
+    pointer-events: none;
+}
+@keyframes rippleAnim { to { transform: scale(4); opacity: 0; } }
+
+/* =========================================
+   7. 履歴リスト・ギャップ・インライン編集
+   ========================================= */
+.log-section-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 14px;
+}
+.log-section-header-left {
+    display: flex; align-items: center; gap: 8px;
+}
+.log-section-icon { flex-shrink: 0; display: block; }
+.log-section-title {
+    font-size: 13px; font-weight: 700; color: var(--text-main); letter-spacing: 0.04em;
+}
+.log-section-total { font-size: 11px; color: #aaa; font-weight: 700; }
+.btn-refresh {
+    background: none; border: none; cursor: pointer;
+    font-size: 15px; color: var(--accent-warm);
+    padding: 2px 4px; border-radius: 8px;
+    transition: transform 0.4s; line-height: 1;
+}
+.btn-refresh:active { transform: rotate(180deg); }
+.btn-refresh.spinning { animation: spinOnce 0.5s ease-out; }
+@keyframes spinOnce { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+.log-item-wrapper { border-bottom: 1px solid #fcf9f7; }
+.log-item { padding: 8px 0; display: flex; align-items: center; cursor: pointer; }
+.log-tag { padding: 3px 10px; border-radius: 10px; font-size: 11px; font-weight: 700; }
+
+.gap-add-row {
+    display: flex; align-items: center; justify-content: center;
+    padding: 5px 0; gap: 10px;
+}
+.gap-line {
+    flex: 1; height: 1px;
+    background: repeating-linear-gradient(90deg, var(--border-color), var(--border-color) 4px, transparent 4px, transparent 8px);
+}
+.btn-gap-add {
+    background: white; border: 1.5px solid var(--accent-warm); color: var(--accent-warm);
+    border-radius: 20px; padding: 4px 14px; font-size: 10px; font-weight: 700;
+    cursor: pointer; font-family: 'Zen Maru Gothic', sans-serif; white-space: nowrap;
+}
+.btn-gap-add:active { transform: scale(0.95); }
+
+.inline-edit-panel {
+    background: #fffaf9; padding: 15px;
+    border-top: 1px dashed var(--accent-warm);
+    animation: slideDownEdit 0.3s ease-out forwards; overflow: hidden;
+}
+@keyframes slideDownEdit { from { max-height: 0; opacity: 0; } to { max-height: 500px; opacity: 1; } }
+
+.edit-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+.edit-grid select, .edit-grid input {
+    width: 100%; padding: 10px; border: 1px solid var(--border-color);
+    border-radius: 10px; font-size: 13px; font-family: 'Zen Maru Gothic', sans-serif;
+}
+.edit-memo-input {
+    width: 100%; height: 60px; padding: 10px; border: 1px solid var(--border-color);
+    border-radius: 10px; margin-bottom: 10px; resize: none;
+    font-family: 'Zen Maru Gothic', sans-serif; font-size: 13px;
+}
+.edit-btns { display: flex; gap: 8px; }
+.btn-save-inline   { flex: 2; background: var(--accent-warm); color: white; border: none; padding: 10px; border-radius: 10px; font-weight: 700; cursor: pointer; font-family: 'Zen Maru Gothic', sans-serif; }
+.btn-delete-inline { flex: 1; background: #ffeded; color: #ff5e5e; border: none; border-radius: 10px; cursor: pointer; font-family: 'Zen Maru Gothic', sans-serif; }
+.btn-close-inline  { flex: 1; background: #f5f5f5; color: #999; border: none; border-radius: 10px; cursor: pointer; font-family: 'Zen Maru Gothic', sans-serif; }
+
+/* =========================================
+   8. 分析ページ
+   ========================================= */
+.stats-tabs { display: flex; background: var(--bg-soft); border-radius: 20px; padding: 4px; margin-bottom: 15px; }
+.stats-tab {
+    flex: 1; padding: 8px 0; text-align: center; border: none;
+    background: transparent; font-weight: 700; font-size: 13px; color: #999;
+    border-radius: 16px; cursor: pointer; font-family: 'Zen Maru Gothic', sans-serif;
+}
+.stats-tab.active { background: white; color: var(--accent-warm); box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
+
+.chart-container { display: flex; justify-content: center; align-items: center; padding: 20px 0; position: relative; }
+.pie-chart {
+    width: 180px; height: 180px; border-radius: 50%; background: #f5f5f5;
+    box-shadow: inset 0 4px 10px rgba(0,0,0,0.1); position: relative;
+}
+
+.stats-legend { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.legend-item {
+    display: flex; flex-direction: column; gap: 5px;
+    padding: 10px 15px; background: var(--bg-soft); border-radius: 14px;
+}
+.legend-item-top {
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 13px; font-weight: 700;
+}
+.legend-item-label { display: flex; align-items: center; }
+.legend-color-box { width: 12px; height: 12px; border-radius: 3px; margin-right: 8px; display: inline-block; flex-shrink: 0; }
+.legend-item-right { color: #999; font-size: 12px; white-space: nowrap; }
+.legend-bar-track { width: 100%; height: 6px; background: #ece6e2; border-radius: 3px; overflow: hidden; }
+.legend-bar-fill { height: 100%; border-radius: 3px; transition: width 0.6s cubic-bezier(0.4,0,0.2,1); }
+
+/* =========================================
+   9. フッターナビ
+   ========================================= */
+.footer-nav {
+    position: fixed; bottom: 0; left: 0; width: 100%;
+    height: var(--footer-h); background: white;
+    border-top: 1px solid var(--border-color);
+    box-shadow: 0 -4px 16px rgba(0,0,0,0.07);
+    display: flex; z-index: 1000;
+}
+.footer-nav-item {
+    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    border: none; background: none; cursor: pointer; gap: 3px;
+    font-family: 'Zen Maru Gothic', sans-serif; color: var(--text-main);
+    opacity: 1; position: relative; transition: background 0.2s; padding-top: 4px;
+}
+.footer-nav-item::before {
+    content: ""; position: absolute; top: 0; left: 0; right: 0;
+    height: 3px; background: var(--accent-warm); border-radius: 0 0 3px 3px;
+    transform: scaleX(0); transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.footer-nav-item.active::before { transform: scaleX(1); }
+.footer-nav-item.active { background: var(--accent-soft); }
+.footer-nav-item:not(:last-child) { border-right: 1px solid var(--border-color); }
+.footer-nav-icon { font-size: 22px; line-height: 1; }
+.footer-nav-label { font-size: 11px; font-weight: 700; }
+
+/* =========================================
+   10. サブメニュー・ローディング
+   ========================================= */
+.sub-menu-overlay {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: var(--overlay-bg); display: none; align-items: center; justify-content: center;
+    z-index: 3000; backdrop-filter: blur(4px);
+}
+.sub-menu-content {
+    background: white; width: 85%; max-width: 340px; padding: 25px;
+    border-radius: 30px; text-align: center;
+    animation: popUp 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+@keyframes popUp { from { transform: scale(0.8); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+.sub-radial-list { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin: 20px 0; }
+.sub-radial-item {
+    padding: 10px 18px; border-radius: 20px;
+    border: 1px solid var(--border-color); background: var(--bg-soft);
+    font-weight: 700; cursor: pointer; transition: transform 0.1s;
+    font-family: 'Zen Maru Gothic', sans-serif;
+}
+.sub-radial-item:active { transform: scale(0.95); }
+.btn-cancel-sub { background: none; border: none; color: #aaa; text-decoration: underline; font-size: 13px; cursor: pointer; font-family: 'Zen Maru Gothic', sans-serif; }
+
+.full-loading {
+    position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+    background: rgba(255,255,255,0.85); z-index: 5000;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    backdrop-filter: blur(4px);
+}
+.spinner {
+    width: 44px; height: 44px;
+    border: 4px solid var(--accent-soft); border-top: 4px solid var(--accent-warm);
+    border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 15px;
+}
+@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
