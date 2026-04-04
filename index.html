@@ -17,9 +17,11 @@
 
     <div class="app">
         <header class="header-main">
-            <div class="date-display-wrapper" onclick="document.getElementById('date-selector').showPicker()">
+            <!-- スマホ対応：input type=date を直接表示 -->
+            <div class="date-display-wrapper" id="date-display-wrapper">
                 <span id="date-text">----/--/-- (-)</span>
-                <input type="date" id="date-selector" style="position:absolute; opacity:0; pointer-events:none;">
+                <span class="date-calendar-icon">📅</span>
+                <input type="date" id="date-selector" class="date-input-native">
             </div>
             <div class="header-time-area">
                 <div id="clock">00:00</div>
@@ -57,7 +59,6 @@
             </div>
 
             <div class="card log-container" style="margin-top:10px;">
-                <!-- 案B：ミニバーSVGアイコン付きヘッダー -->
                 <div class="log-section-header">
                     <div class="log-section-header-left">
                         <svg class="log-section-icon" width="22" height="16" viewBox="0 0 22 16" fill="none" xmlns="http://www.w3.org/2000/svg">

@@ -33,6 +33,7 @@ const icons = {
 };
 
 const NO_SUB_CATS = ["休憩", "仕事"];
+const SYNC_INTERVAL_SEC = 20;
 
 let logs = [];
 let currentTask = null;
@@ -40,13 +41,15 @@ let openEditIndex = -1;
 let currentStatsPeriod = "day";
 let statsGroupMode = "sub";
 let selectedDate = getJSTDateStr();
+let lastSyncedTaskStart = null;
 
 // =========================================
 // ユーティリティ
 // =========================================
 function getJSTDateStr(d = new Date()) {
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
+    // ローカル時刻でYYYY-MM-DDを返す（UTC変換しない）
+    const y   = d.getFullYear();
+    const m   = String(d.getMonth() + 1).padStart(2, '0');
     const day = String(d.getDate()).padStart(2, '0');
     return `${y}-${m}-${day}`;
 }
@@ -56,17 +59,53 @@ function parseLocalDate(dateStr) {
     return new Date(y, m - 1, d, 0, 0, 0);
 }
 
+// "YYYY-MM-DD HH:MM:SS" または ISO文字列 → Date（JST として解釈）
+function parseDateTime(str) {
+    if (!str) return null;
+    str = String(str).trim();
+    // ISO形式（Zあり）→ そのままDate（UTCとして正しく解釈される）
+    if (str.includes("T") && str.endsWith("Z")) {
+        return new Date(str);
+    }
+    // "YYYY-MM-DD HH:MM:SS" → ローカル時刻として解釈
+    // （スペースをTに変換してISOにするとUTC扱いになるため、手動でパース）
+    const m = str.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):?(\d{2})?/);
+    if (m) {
+        return new Date(
+            Number(m[1]), Number(m[2]) - 1, Number(m[3]),
+            Number(m[4]), Number(m[5]), Number(m[6] || 0)
+        );
+    }
+    return new Date(str);
+}
+
+// Date → "YYYY-MM-DD HH:MM:SS"（JST、ローカル時刻）
+function toLocalDateTimeStr(d) {
+    if (!d) return "";
+    const dt = (d instanceof Date) ? d : new Date(d);
+    const y  = dt.getFullYear();
+    const mo = String(dt.getMonth() + 1).padStart(2, '0');
+    const dy = String(dt.getDate()).padStart(2, '0');
+    const h  = String(dt.getHours()).padStart(2, '0');
+    const mi = String(dt.getMinutes()).padStart(2, '0');
+    const s  = String(dt.getSeconds()).padStart(2, '0');
+    return `${y}-${mo}-${dy} ${h}:${mi}:${s}`;
+}
+
 function fT(d, baseDateStr) {
     if (!d) return "00:00";
-    const h = String(d.getHours()).padStart(2, '0');
-    const m = String(d.getMinutes()).padStart(2, '0');
-    if (baseDateStr && getJSTDateStr(d) !== baseDateStr && d.getHours() === 0 && d.getMinutes() === 0) return "24:00";
+    const dt = (d instanceof Date) ? d : new Date(d);
+    const h  = String(dt.getHours()).padStart(2, '0');
+    const m  = String(dt.getMinutes()).padStart(2, '0');
+    if (baseDateStr && getJSTDateStr(dt) !== baseDateStr && dt.getHours() === 0 && dt.getMinutes() === 0) return "24:00";
     return `${h}:${m}`;
 }
 
 function getDurationMs(start, end) {
     if (!start || !end) return 0;
-    const diff = end.getTime() - start.getTime();
+    const s = (start instanceof Date) ? start : new Date(start);
+    const e = (end   instanceof Date) ? end   : new Date(end);
+    const diff = e.getTime() - s.getTime();
     return diff > 0 ? diff : 0;
 }
 
@@ -102,7 +141,7 @@ function getMidColorForCat(cat) {
 }
 
 // =========================================
-// 通信（キャッシュ付き）
+// 通信・キャッシュ
 // =========================================
 function showLoading() { document.getElementById("full-loading").style.display = "flex"; }
 function hideLoading() { document.getElementById("full-loading").style.display = "none"; }
@@ -115,15 +154,23 @@ function loadCache(dateStr) {
     try {
         const raw = localStorage.getItem(cacheKey(dateStr));
         if (!raw) return null;
-        return JSON.parse(raw).map(l => ({ ...l, start: new Date(l.start), end: new Date(l.end) }));
+        return JSON.parse(raw).map(l => ({
+            ...l,
+            start: parseDateTime(l.start),
+            end:   parseDateTime(l.end)
+        }));
     } catch(e) { return null; }
 }
 
 async function fetchLogs(dateStr) {
     try {
-        const res = await fetch(GAS_URL, { method: "POST", body: JSON.stringify({ method: "load", date: dateStr }) });
+        const res  = await fetch(GAS_URL, { method: "POST", body: JSON.stringify({ method: "load", date: dateStr }) });
         const data = await res.json();
-        const parsed = (data || []).map(l => ({ ...l, start: new Date(l.start), end: new Date(l.end) }));
+        const parsed = (data || []).map(l => ({
+            ...l,
+            start: parseDateTime(l.start),
+            end:   parseDateTime(l.end)
+        }));
         saveCache(dateStr, parsed);
         return parsed;
     } catch(e) {
@@ -132,26 +179,84 @@ async function fetchLogs(dateStr) {
 }
 
 async function pushLogs(dateStr, data) {
+    // 保存時はローカル日時文字列（JST）で送信
+    const serialized = data.map(l => ({
+        ...l,
+        start: toLocalDateTimeStr(l.start),
+        end:   toLocalDateTimeStr(l.end)
+    }));
     saveCache(dateStr, data);
     try {
-        await fetch(GAS_URL, { method: "POST", body: JSON.stringify({ method: "save", date: dateStr, data }) });
-    } catch(e) { console.error("Save Error", e); }
+        await fetch(GAS_URL, { method: "POST", body: JSON.stringify({ method: "save", date: dateStr, data: serialized }) });
+    } catch(e) { console.error("Push Logs Error", e); }
 }
 
-async function saveTaskSplit(task) {
-    const startStr = getJSTDateStr(task.start);
-    const endStr   = getJSTDateStr(task.end);
-    const boundary = parseLocalDate(endStr);
-    const prevPart = { category: task.category, sub: task.sub, memo: task.memo, start: task.start, end: boundary };
-    const nextPart = { category: task.category, sub: task.sub, memo: task.memo, start: boundary, end: task.end };
-    const prevLogs = await fetchLogs(startStr);
-    prevLogs.push(prevPart);
-    await pushLogs(startStr, prevLogs);
-    const nextLogs = await fetchLogs(endStr);
-    nextLogs.push(nextPart);
-    await pushLogs(endStr, nextLogs);
-    if (endStr === selectedDate || startStr === selectedDate) {
+// =========================================
+// クロスデバイス同期
+// =========================================
+async function syncActiveTaskToCloud(task) {
+    try {
+        const payload = task ? {
+            method:   "setActiveTask",
+            task: {
+                category: task.category,
+                sub:      task.sub,
+                start:    toLocalDateTimeStr(task.start),
+                memo:     task.memo || ""
+            }
+        } : { method: "setActiveTask", task: null };
+        await fetch(GAS_URL, { method: "POST", body: JSON.stringify(payload) });
+    } catch(e) { console.error("syncActiveTask error", e); }
+}
+
+async function fetchActiveTaskFromCloud() {
+    try {
+        const res  = await fetch(GAS_URL, { method: "POST", body: JSON.stringify({ method: "getActiveTask" }) });
+        const data = await res.json();
+        if (!data || !data.category) return null;
+        return {
+            category: data.category,
+            sub:      data.sub,
+            start:    parseDateTime(data.start),
+            memo:     data.memo || ""
+        };
+    } catch(e) { return null; }
+}
+
+async function pollActiveTask() {
+    if (selectedDate !== getJSTDateStr()) return;
+    const cloudTask = await fetchActiveTaskFromCloud();
+
+    const cloudStartStr = cloudTask ? toLocalDateTimeStr(cloudTask.start) : null;
+    const localStartStr = currentTask ? toLocalDateTimeStr(new Date(currentTask.start)) : null;
+
+    if (cloudStartStr === lastSyncedTaskStart) return;
+    lastSyncedTaskStart = cloudStartStr;
+
+    if (cloudTask && localStartStr !== cloudStartStr) {
+        if (currentTask) {
+            const snap = {
+                category: currentTask.category,
+                sub:      currentTask.sub,
+                memo:     (document.getElementById("memo-input") || {}).value || "",
+                start:    new Date(currentTask.start),
+                end:      new Date()
+            };
+            await _commitTask(snap);
+        }
+        currentTask = cloudTask;
+        localStorage.setItem("currentTask", JSON.stringify({
+            ...currentTask, start: toLocalDateTimeStr(currentTask.start)
+        }));
+        renderActiveTask();
         logs = await fetchLogs(selectedDate);
+        renderLogs();
+    } else if (!cloudTask && currentTask) {
+        currentTask = null;
+        localStorage.removeItem("currentTask");
+        renderActiveTask();
+        logs = await fetchLogs(selectedDate);
+        renderLogs();
     }
 }
 
@@ -159,12 +264,15 @@ async function saveTaskSplit(task) {
 // UI制御
 // =========================================
 function updateDateVisuals() {
-    const d = parseLocalDate(selectedDate);
+    const d    = parseLocalDate(selectedDate);
     const days = ["日","月","火","水","木","金","土"];
-    document.getElementById("date-text").innerText = `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()} (${days[d.getDay()]})`;
+    document.getElementById("date-text").innerText =
+        `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()} (${days[d.getDay()]})`;
+    document.getElementById("date-selector").value = selectedDate;
+
     const isToday = (selectedDate === getJSTDateStr());
-    document.getElementById("clock").style.display = isToday ? "block" : "none";
-    document.getElementById("btn-go-today").style.display = isToday ? "none" : "block";
+    document.getElementById("clock").style.display          = isToday ? "block" : "none";
+    document.getElementById("btn-go-today").style.display   = isToday ? "none"  : "block";
     document.getElementById("active-task-card").style.display = isToday ? "block" : "none";
     const mc = document.getElementById("main-controls");
     if (mc) mc.style.display = isToday ? "block" : "none";
@@ -184,11 +292,8 @@ function renderCategoryGrid() {
         div.innerHTML = `<span style="font-size:22px;">${icons[cat]}</span><span>${cat}</span>`;
         div.addEventListener("click", (e) => {
             addRipple(div, e);
-            if (NO_SUB_CATS.includes(cat)) {
-                startTask(cat, categories[cat][0]);
-            } else {
-                showSubMenu(cat);
-            }
+            if (NO_SUB_CATS.includes(cat)) startTask(cat, categories[cat][0]);
+            else showSubMenu(cat);
         });
         gridEl.appendChild(div);
     });
@@ -212,26 +317,24 @@ function showSubMenu(cat) {
 }
 
 // =========================================
-// 計測中カードの描画
+// 計測中カード
 // =========================================
 function renderActiveTask() {
-    const display = document.getElementById("active-task-display");
-    const statusEl = document.getElementById("active-status-label");
-    const recordingArea = document.getElementById("recording-only-area");
+    const display     = document.getElementById("active-task-display");
+    const statusEl    = document.getElementById("active-status-label");
+    const recordArea  = document.getElementById("recording-only-area");
 
     if (!currentTask) {
         display.innerHTML = `<span style="color:#aaa; font-size:13px;">記録は停止しています</span>`;
         statusEl.innerText = "● Stopped";
         statusEl.className = "active-status-dot stopped";
-        recordingArea.style.display = "none";
+        if (recordArea) recordArea.style.display = "none";
         return;
     }
-
     statusEl.innerText = "● Recording";
     statusEl.className = "active-status-dot recording";
-    recordingArea.style.display = "block";
+    if (recordArea) recordArea.style.display = "block";
 
-    // 開始時刻をタイムライン表示と同じ 12px で中項目右隣に配置
     const startTimeStr = fT(new Date(currentTask.start));
     display.innerHTML = `
         <div class="active-task-main">
@@ -251,7 +354,6 @@ function renderLogs() {
     if (!list) return;
     list.innerHTML = "";
 
-    // サマリー
     const dailyTotals = {};
     let grandMs = 0;
     logs.forEach(l => {
@@ -266,53 +368,49 @@ function renderLogs() {
     if (totalEl) totalEl.innerText = grandMs > 0 ? `合計 ${formatDuration(grandMs)}` : "";
 
     const detailsArea = document.getElementById("daily-summary-details");
-    detailsArea.innerHTML = "";
-    Object.keys(dailyTotals).sort((a,b) => dailyTotals[b] - dailyTotals[a]).forEach(sub => {
-        const darkColor = getDarkColorForSub(sub);
-        const div = document.createElement("div");
-        div.className = "summary-detail-item";
-        div.style.setProperty("--item-color", darkColor);
-        div.innerHTML = `<span>${icons[sub] || ''} ${sub}</span><span style="color:#888;">${formatDuration(dailyTotals[sub])}</span>`;
-        detailsArea.appendChild(div);
+    if (detailsArea) {
+        detailsArea.innerHTML = "";
+        Object.keys(dailyTotals).sort((a,b) => dailyTotals[b] - dailyTotals[a]).forEach(sub => {
+            const darkColor = getDarkColorForSub(sub);
+            const div = document.createElement("div");
+            div.className = "summary-detail-item";
+            div.style.setProperty("--item-color", darkColor);
+            div.innerHTML = `<span>${icons[sub] || ''} ${sub}</span><span style="color:#888;">${formatDuration(dailyTotals[sub])}</span>`;
+            detailsArea.appendChild(div);
+        });
+    }
+
+    const sortedLogs = [...logs].sort((a, b) => {
+        const as = (a.start instanceof Date) ? a.start : new Date(a.start);
+        const bs = (b.start instanceof Date) ? b.start : new Date(b.start);
+        return bs - as;
     });
 
-    // ログを新しい順にソート
-    const sortedLogs = [...logs].sort((a, b) => b.start - a.start);
-
-    // =========================================
-    // 計測中タスクと直近ログのギャップを履歴リスト最上部に表示
-    // =========================================
+    // 計測中タスクと直近ログのギャップ
     if (currentTask && sortedLogs.length > 0) {
-        const latestLog = sortedLogs[0]; // 新しい順なので先頭が最新
-        const gapMs = new Date(currentTask.start).getTime() - latestLog.end.getTime();
-
+        const latestLog = sortedLogs[0];
+        const gapMs = new Date(currentTask.start).getTime() - new Date(latestLog.end).getTime();
         if (gapMs >= 60000) {
-            // 計測中タスクのダミー行（クリック不可・参照用）
             const currentRow = document.createElement("div");
             currentRow.style.cssText = "padding:6px 0 2px; opacity:0.55;";
             currentRow.innerHTML = `
-                <span class="log-tag" style="background:${colors[currentTask.category] || '#eee'}">
-                    ${icons[currentTask.sub] || ''} ${currentTask.sub}
-                </span>
+                <span class="log-tag" style="background:${colors[currentTask.category] || '#eee'}">${icons[currentTask.sub] || ''} ${currentTask.sub}</span>
                 <span style="font-size:12px; color:#999; margin-left:8px;">${fT(new Date(currentTask.start), selectedDate)}〜 計測中</span>
             `;
             list.appendChild(currentRow);
-
-            // ギャップ行
             const gapRow = document.createElement("div");
             gapRow.className = "gap-add-row";
             gapRow.innerHTML = `
                 <div class="gap-line"></div>
-                <button class="btn-gap-add" onclick="addAtGap('${fT(latestLog.end)}','${fT(new Date(currentTask.start))}')">＋ ${formatDuration(gapMs)}の空きを埋める</button>
+                <button class="btn-gap-add" onclick="addAtGap('${fT(new Date(latestLog.end))}','${fT(new Date(currentTask.start))}')">＋ ${formatDuration(gapMs)}の空きを埋める</button>
                 <div class="gap-line"></div>
             `;
             list.appendChild(gapRow);
         }
     }
 
-    // 通常ログ一覧
     sortedLogs.forEach((l, i) => {
-        const idx = logs.indexOf(l);
+        const idx  = logs.indexOf(l);
         const diff = getDurationMs(l.start, l.end);
         const wrapper = document.createElement("div");
         wrapper.className = "log-item-wrapper";
@@ -321,7 +419,7 @@ function renderLogs() {
             <div class="log-item" onclick="toggleInlineEdit(${idx})">
                 <div style="flex:1;">
                     <span class="log-tag" style="background:${colors[l.category] || '#eee'}">${icons[l.sub] || ''} ${l.sub}</span>
-                    <span style="font-size:12px; color:#999; margin-left:8px;">${fT(l.start, selectedDate)}〜${fT(l.end, selectedDate)} (${formatDuration(diff)})</span>
+                    <span style="font-size:12px; color:#999; margin-left:8px;">${fT(new Date(l.start), selectedDate)}〜${fT(new Date(l.end), selectedDate)} (${formatDuration(diff)})</span>
                     ${l.memo ? `<div style="font-size:11px; color:#888; margin-top:2px;">${l.memo}</div>` : ''}
                 </div>
             </div>
@@ -336,14 +434,14 @@ function renderLogs() {
                     <select id="edit-sub-${idx}"></select>
                 </div>
                 <div class="edit-grid">
-                    <input type="time" id="edit-start-${idx}" value="${fT(l.start)}">
-                    <input type="time" id="edit-end-${idx}" value="${fT(l.end)}">
+                    <input type="time" id="edit-start-${idx}" value="${fT(new Date(l.start))}">
+                    <input type="time" id="edit-end-${idx}"   value="${fT(new Date(l.end))}">
                 </div>
                 <textarea class="edit-memo-input" id="edit-memo-${idx}" placeholder="メモを入力...">${l.memo || ''}</textarea>
                 <div class="edit-btns">
-                    <button class="btn-save-inline" onclick="saveInlineEdit(${idx})">保存</button>
+                    <button class="btn-save-inline"   onclick="saveInlineEdit(${idx})">保存</button>
                     <button class="btn-delete-inline" onclick="deleteInlineEdit(${idx})">削除</button>
-                    <button class="btn-close-inline" onclick="toggleInlineEdit(-1)">閉じる</button>
+                    <button class="btn-close-inline"  onclick="toggleInlineEdit(-1)">閉じる</button>
                 </div>
             `;
             wrapper.appendChild(editPanel);
@@ -356,16 +454,15 @@ function renderLogs() {
         }
         list.appendChild(wrapper);
 
-        // ログ間ギャップ
         if (i < sortedLogs.length - 1) {
-            const nextL = sortedLogs[i + 1];
-            const gapMs = l.start.getTime() - nextL.end.getTime();
+            const nextL  = sortedLogs[i + 1];
+            const gapMs  = new Date(l.start).getTime() - new Date(nextL.end).getTime();
             if (gapMs >= 60000) {
                 const gapRow = document.createElement("div");
                 gapRow.className = "gap-add-row";
                 gapRow.innerHTML = `
                     <div class="gap-line"></div>
-                    <button class="btn-gap-add" onclick="addAtGap('${fT(nextL.end)}','${fT(l.start)}')">＋ ${formatDuration(gapMs)}の空きを埋める</button>
+                    <button class="btn-gap-add" onclick="addAtGap('${fT(new Date(nextL.end))}','${fT(new Date(l.start))}')">＋ ${formatDuration(gapMs)}の空きを埋める</button>
                     <div class="gap-line"></div>
                 `;
                 list.appendChild(gapRow);
@@ -376,23 +473,21 @@ function renderLogs() {
     drawTimeline();
 }
 
-// =========================================
-// タイムライン描画
-// =========================================
 function drawTimeline() {
     const bar = document.getElementById("bar");
     if (!bar) return;
     bar.querySelectorAll(".segment").forEach(s => s.remove());
-
     const base = parseLocalDate(selectedDate);
     logs.forEach(l => {
         const diff = getDurationMs(l.start, l.end);
         if (diff <= 0) return;
-        const startMin = Math.max(0, (l.start.getTime() - base.getTime()) / 60000);
-        const endMin   = Math.min(1440, (l.end.getTime() - base.getTime()) / 60000);
+        const startMs  = (l.start instanceof Date ? l.start : new Date(l.start)).getTime();
+        const endMs    = (l.end   instanceof Date ? l.end   : new Date(l.end)).getTime();
+        const startMin = Math.max(0, (startMs - base.getTime()) / 60000);
+        const endMin   = Math.min(1440, (endMs - base.getTime()) / 60000);
         if (startMin >= 1440 || endMin <= 0) return;
         const div = document.createElement("div");
-        div.className = "segment";
+        div.className   = "segment";
         div.style.left  = (startMin / 14.4) + "%";
         div.style.width = Math.max((endMin - startMin) / 14.4, 0.5) + "%";
         div.style.background = getMidColorForCat(l.category);
@@ -403,8 +498,8 @@ function drawTimeline() {
 function addAtGap(s, e) {
     const newItem = {
         category: "休憩", sub: "休憩",
-        start: new Date(selectedDate + "T" + s),
-        end:   new Date(selectedDate + "T" + e),
+        start: new Date(selectedDate + "T" + s + ":00"),
+        end:   new Date(selectedDate + "T" + e + ":00"),
         memo: ""
     };
     logs.push(newItem);
@@ -419,34 +514,60 @@ function startTask(cat, sub) {
     if (currentTask) {
         const snap = {
             category: currentTask.category,
-            sub: currentTask.sub,
-            memo: (document.getElementById("memo-input") || {}).value || "",
-            start: new Date(currentTask.start),
-            end: new Date()
+            sub:      currentTask.sub,
+            memo:     (document.getElementById("memo-input") || {}).value || "",
+            start:    new Date(currentTask.start),
+            end:      new Date()
         };
         _commitTask(snap);
     }
     currentTask = { category: cat, sub: sub, start: new Date(), memo: "" };
-    localStorage.setItem("currentTask", JSON.stringify(currentTask));
+    lastSyncedTaskStart = toLocalDateTimeStr(currentTask.start);
+    localStorage.setItem("currentTask", JSON.stringify({
+        ...currentTask, start: toLocalDateTimeStr(currentTask.start)
+    }));
     if (document.getElementById("memo-input")) document.getElementById("memo-input").value = "";
     renderActiveTask();
-    renderLogs(); // ギャップ行を即時反映
+    renderLogs();
+    syncActiveTaskToCloud(currentTask);
 }
 
 async function _commitTask(task) {
-    const startStr = getJSTDateStr(task.start);
-    const endStr   = getJSTDateStr(task.end);
+    const startStr = getJSTDateStr(new Date(task.start));
+    const endStr   = getJSTDateStr(new Date(task.end));
     if (startStr !== endStr) {
         await saveTaskSplit(task);
     } else {
         const dayLogs = await fetchLogs(startStr);
-        dayLogs.push(task);
+        dayLogs.push({
+            ...task,
+            start: new Date(task.start),
+            end:   new Date(task.end)
+        });
         await pushLogs(startStr, dayLogs);
         if (startStr === selectedDate) {
             logs = await fetchLogs(selectedDate);
+            renderLogs();
         }
     }
-    renderLogs();
+}
+
+async function saveTaskSplit(task) {
+    const startStr = getJSTDateStr(new Date(task.start));
+    const endStr   = getJSTDateStr(new Date(task.end));
+    const boundary = parseLocalDate(endStr);
+    const prevPart = { category: task.category, sub: task.sub, memo: task.memo, start: new Date(task.start), end: boundary };
+    const nextPart = { category: task.category, sub: task.sub, memo: task.memo, start: boundary, end: new Date(task.end) };
+    const prevLogs = await fetchLogs(startStr);
+    prevLogs.push(prevPart);
+    await pushLogs(startStr, prevLogs);
+    const nextLogs = await fetchLogs(endStr);
+    nextLogs.push(nextPart);
+    await pushLogs(endStr, nextLogs);
+    if (endStr === selectedDate || startStr === selectedDate) {
+        logs = await fetchLogs(selectedDate);
+        renderLogs();
+    }
 }
 
 async function endTask() {
@@ -454,47 +575,20 @@ async function endTask() {
     showLoading();
     const task = {
         category: currentTask.category,
-        sub: currentTask.sub,
-        memo: (document.getElementById("memo-input") || {}).value || "",
-        start: new Date(currentTask.start),
-        end: new Date()
+        sub:      currentTask.sub,
+        memo:     (document.getElementById("memo-input") || {}).value || "",
+        start:    new Date(currentTask.start),
+        end:      new Date()
     };
     currentTask = null;
+    lastSyncedTaskStart = null;
     localStorage.removeItem("currentTask");
     if (document.getElementById("memo-input")) document.getElementById("memo-input").value = "";
     renderActiveTask();
+    syncActiveTaskToCloud(null);
     await _commitTask(task);
     hideLoading();
     renderLogs();
-}
-
-function renderActiveTask() {
-    const display = document.getElementById("active-task-display");
-    const statusEl = document.getElementById("active-status-label");
-    const recordingArea = document.getElementById("recording-only-area");
-
-    if (!currentTask) {
-        display.innerHTML = `<span style="color:#aaa; font-size:13px;">記録は停止しています</span>`;
-        statusEl.innerText = "● Stopped";
-        statusEl.className = "active-status-dot stopped";
-        recordingArea.style.display = "none";
-        return;
-    }
-
-    statusEl.innerText = "● Recording";
-    statusEl.className = "active-status-dot recording";
-    recordingArea.style.display = "block";
-
-    // 開始時刻をタイムライン表示（12px）と同サイズに
-    const startTimeStr = fT(new Date(currentTask.start));
-    display.innerHTML = `
-        <div class="active-task-main">
-            <span class="task-cat-label">${icons[currentTask.category]} ${currentTask.category}</span>
-            <span class="task-separator">＞</span>
-            <span class="task-sub-label">${icons[currentTask.sub]} ${currentTask.sub}</span>
-            <span class="task-start-badge">${startTimeStr}〜</span>
-        </div>
-    `;
 }
 
 // =========================================
@@ -504,27 +598,24 @@ function toggleInlineEdit(idx) { openEditIndex = (openEditIndex === idx) ? -1 : 
 
 async function saveInlineEdit(idx) {
     showLoading();
-    const l = logs[idx];
-    const newCat  = document.getElementById(`edit-cat-${idx}`).value;
-    const newSub  = document.getElementById(`edit-sub-${idx}`).value;
-    const newMemo = document.getElementById(`edit-memo-${idx}`).value;
-    const sVal = document.getElementById(`edit-start-${idx}`).value;
-    const eVal = document.getElementById(`edit-end-${idx}`).value;
-    let startObj = new Date(`${selectedDate}T${sVal}`);
-    let endObj   = new Date(`${selectedDate}T${eVal}`);
-    if (endObj <= startObj) endObj.setDate(endObj.getDate() + 1);
-    const startStr = getJSTDateStr(startObj);
-    const endStr   = getJSTDateStr(endObj);
-    if (startStr !== endStr) {
-        const boundary = parseLocalDate(endStr);
-        logs[idx] = { category: newCat, sub: newSub, start: startObj, end: boundary, memo: newMemo };
+    const l      = logs[idx];
+    const newCat = document.getElementById(`edit-cat-${idx}`).value;
+    const newSub = document.getElementById(`edit-sub-${idx}`).value;
+    const newMemo= document.getElementById(`edit-memo-${idx}`).value;
+    let sO = new Date(selectedDate + "T" + document.getElementById(`edit-start-${idx}`).value + ":00");
+    let eO = new Date(selectedDate + "T" + document.getElementById(`edit-end-${idx}`).value   + ":00");
+    if (eO <= sO) eO.setDate(eO.getDate() + 1);
+
+    if (getJSTDateStr(sO) !== getJSTDateStr(eO)) {
+        const boundary = parseLocalDate(getJSTDateStr(eO));
+        logs[idx] = { category: newCat, sub: newSub, start: sO, end: boundary, memo: newMemo };
         await pushLogs(selectedDate, logs);
-        const nextLogs = await fetchLogs(endStr);
-        nextLogs.push({ category: newCat, sub: newSub, start: boundary, end: endObj, memo: newMemo });
-        await pushLogs(endStr, nextLogs);
+        const nextLogs = await fetchLogs(getJSTDateStr(eO));
+        nextLogs.push({ category: newCat, sub: newSub, start: boundary, end: eO, memo: newMemo });
+        await pushLogs(getJSTDateStr(eO), nextLogs);
     } else {
         l.category = newCat; l.sub = newSub; l.memo = newMemo;
-        l.start = startObj; l.end = endObj;
+        l.start = sO; l.end = eO;
         await pushLogs(selectedDate, logs);
     }
     openEditIndex = -1;
@@ -572,8 +663,9 @@ function renderStatsChart(allLogs) {
         }
     });
     renderStatsGroupToggle();
-    const pie = document.getElementById("pie-chart");
+    const pie    = document.getElementById("pie-chart");
     const legend = document.getElementById("stats-legend");
+    if (!pie || !legend) return;
     pie.innerHTML = ""; legend.innerHTML = "";
     if (grandTotal === 0) {
         pie.style.background = "#f5f5f5";
@@ -587,15 +679,14 @@ function renderStatsChart(allLogs) {
     svg.setAttribute("width", size); svg.setAttribute("height", size);
     svg.style.cssText = "position:absolute;top:0;left:0;pointer-events:none;";
     sortedKeys.forEach(key => {
-        const ratio = totals[key] / grandTotal;
-        const deg = ratio * 360;
-        const catKey = statsGroupMode === 'cat' ? key : (Object.keys(categories).find(c => categories[c].includes(key)) || key);
+        const ratio   = totals[key] / grandTotal;
+        const deg     = ratio * 360;
+        const catKey  = statsGroupMode === 'cat' ? key : (Object.keys(categories).find(c => categories[c].includes(key)) || key);
         const color     = colors[catKey]     || "#eee";
         const darkColor = colorsDark[catKey] || "#bbb";
         if (ratio > 0.05) {
             const midRad = ((currentDeg + deg / 2) - 90) * (Math.PI / 180);
-            const x = cx + r * Math.cos(midRad);
-            const y = cy + r * Math.sin(midRad);
+            const x = cx + r * Math.cos(midRad), y = cy + r * Math.sin(midRad);
             const t1 = document.createElementNS("http://www.w3.org/2000/svg", "text");
             t1.setAttribute("x", x); t1.setAttribute("y", y - 7);
             t1.setAttribute("text-anchor", "middle"); t1.setAttribute("dominant-baseline", "middle");
@@ -634,8 +725,7 @@ function renderStatsChart(allLogs) {
 
 async function updateStatsView() {
     const dates = getDateArray(currentStatsPeriod);
-    const cachedResults = dates.map(d => loadCache(d) || []);
-    renderStatsChart([].concat(...cachedResults));
+    renderStatsChart([].concat(...dates.map(d => loadCache(d) || [])));
     showLoading();
     const freshResults = await Promise.all(dates.map(d => fetchLogs(d)));
     renderStatsChart([].concat(...freshResults));
@@ -668,25 +758,22 @@ async function loadFromCloud() {
     const cached = loadCache(selectedDate);
     if (cached) {
         logs = cached;
-        updateDateVisuals();
-        renderCategoryGrid();
-        renderLogs();
+        updateDateVisuals(); renderCategoryGrid(); renderLogs();
     } else {
         showLoading();
     }
     const fresh = await fetchLogs(selectedDate);
     logs = fresh;
     hideLoading();
-    updateDateVisuals();
-    renderCategoryGrid();
-    renderLogs();
+    updateDateVisuals(); renderCategoryGrid(); renderLogs();
 }
 
 // =========================================
 // 初期化
 // =========================================
-window.onload = () => {
-    const bar = document.getElementById("bar");
+window.onload = async () => {
+    // タイムライン目盛り
+    const bar   = document.getElementById("bar");
     const scale = document.getElementById("timeline-scale");
     for (let h = 0; h <= 24; h++) {
         const grid = document.createElement("div");
@@ -696,6 +783,8 @@ window.onload = () => {
             span.innerText = h; span.style.left = (h/24*100) + "%"; scale.appendChild(span);
         }
     }
+
+    // タブ
     document.getElementById("tab-record-btn").onclick = () => {
         document.getElementById('page-record').classList.add('active');
         document.getElementById('page-stats').classList.remove('active');
@@ -718,15 +807,22 @@ window.onload = () => {
             updateStatsView();
         };
     });
-    document.getElementById("date-selector").onchange = (e) => {
+
+    // 日付セレクター（PC・iOS・Android全対応）
+    const dateSel = document.getElementById("date-selector");
+    dateSel.value = selectedDate;
+    dateSel.addEventListener("change", (e) => {
         if (e.target.value) {
-            selectedDate = e.target.value; updateDateVisuals();
+            selectedDate = e.target.value;
+            updateDateVisuals();
             if (document.getElementById("page-stats").classList.contains("active")) updateStatsView();
             else loadFromCloud();
         }
-    };
+    });
+
     document.getElementById("btn-go-today").onclick = () => {
-        selectedDate = getJSTDateStr(); updateDateVisuals();
+        selectedDate = getJSTDateStr();
+        updateDateVisuals();
         if (document.getElementById("page-stats").classList.contains("active")) updateStatsView();
         else loadFromCloud();
     };
@@ -741,24 +837,41 @@ window.onload = () => {
         loadFromCloud();
     };
 
-    loadFromCloud();
-
-    const saved = localStorage.getItem("currentTask");
-    if (saved) {
-        currentTask = JSON.parse(saved);
-        currentTask.start = new Date(currentTask.start);
-        renderActiveTask();
+    // 初回：クラウドの計測中タスクを優先して復元
+    const cloudTask = await fetchActiveTaskFromCloud();
+    if (cloudTask && cloudTask.start) {
+        currentTask = cloudTask;
+        lastSyncedTaskStart = toLocalDateTimeStr(currentTask.start);
+        localStorage.setItem("currentTask", JSON.stringify({
+            ...currentTask, start: toLocalDateTimeStr(currentTask.start)
+        }));
+    } else {
+        const saved = localStorage.getItem("currentTask");
+        if (saved) {
+            try {
+                const parsed = JSON.parse(saved);
+                currentTask = { ...parsed, start: parseDateTime(parsed.start) };
+            } catch(e) {}
+        }
     }
+    renderActiveTask();
+    await loadFromCloud();
 
+    // 時計・タイマー
     setInterval(() => {
-        const now = new Date();
-        document.getElementById("clock").innerText = now.toLocaleTimeString('ja-JP', { hour:'2-digit', minute:'2-digit' });
+        const now     = new Date();
+        const clockEl = document.getElementById("clock");
+        if (clockEl) clockEl.innerText = now.toLocaleTimeString('ja-JP', { hour:'2-digit', minute:'2-digit' });
         if (currentTask) {
-            const diff = Math.floor((now - currentTask.start) / 1000);
+            const diff = Math.floor((now - new Date(currentTask.start)) / 1000);
             const h = String(Math.floor(diff/3600)).padStart(2,"0");
             const m = String(Math.floor((diff%3600)/60)).padStart(2,"0");
             const s = String(diff%60).padStart(2,"0");
-            document.getElementById("elapsed-timer").innerText = `${h}:${m}:${s}`;
+            const timerEl = document.getElementById("elapsed-timer");
+            if (timerEl) timerEl.innerText = `${h}:${m}:${s}`;
         }
     }, 1000);
+
+    // クロスデバイス同期ポーリング
+    setInterval(pollActiveTask, SYNC_INTERVAL_SEC * 1000);
 };
