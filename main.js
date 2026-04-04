@@ -47,7 +47,6 @@ let lastSyncedTaskStart = null;
 // ユーティリティ
 // =========================================
 function getJSTDateStr(d = new Date()) {
-    // ローカル時刻でYYYY-MM-DDを返す（UTC変換しない）
     const y   = d.getFullYear();
     const m   = String(d.getMonth() + 1).padStart(2, '0');
     const day = String(d.getDate()).padStart(2, '0');
@@ -59,16 +58,12 @@ function parseLocalDate(dateStr) {
     return new Date(y, m - 1, d, 0, 0, 0);
 }
 
-// "YYYY-MM-DD HH:MM:SS" または ISO文字列 → Date（JST として解釈）
 function parseDateTime(str) {
     if (!str) return null;
     str = String(str).trim();
-    // ISO形式（Zあり）→ そのままDate（UTCとして正しく解釈される）
     if (str.includes("T") && str.endsWith("Z")) {
         return new Date(str);
     }
-    // "YYYY-MM-DD HH:MM:SS" → ローカル時刻として解釈
-    // （スペースをTに変換してISOにするとUTC扱いになるため、手動でパース）
     const m = str.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):?(\d{2})?/);
     if (m) {
         return new Date(
@@ -79,7 +74,6 @@ function parseDateTime(str) {
     return new Date(str);
 }
 
-// Date → "YYYY-MM-DD HH:MM:SS"（JST、ローカル時刻）
 function toLocalDateTimeStr(d) {
     if (!d) return "";
     const dt = (d instanceof Date) ? d : new Date(d);
@@ -94,7 +88,8 @@ function toLocalDateTimeStr(d) {
 
 function fT(d, baseDateStr) {
     if (!d) return "00:00";
-    const dt = (d instanceof Date) ? d : new Date(d);
+    const dt = (d instanceof Date) ? d : parseDateTime(String(d));
+    if (!dt) return "00:00";
     const h  = String(dt.getHours()).padStart(2, '0');
     const m  = String(dt.getMinutes()).padStart(2, '0');
     if (baseDateStr && getJSTDateStr(dt) !== baseDateStr && dt.getHours() === 0 && dt.getMinutes() === 0) return "24:00";
@@ -103,8 +98,9 @@ function fT(d, baseDateStr) {
 
 function getDurationMs(start, end) {
     if (!start || !end) return 0;
-    const s = (start instanceof Date) ? start : new Date(start);
-    const e = (end   instanceof Date) ? end   : new Date(end);
+    const s = (start instanceof Date) ? start : parseDateTime(String(start));
+    const e = (end   instanceof Date) ? end   : parseDateTime(String(end));
+    if (!s || !e) return 0;
     const diff = e.getTime() - s.getTime();
     return diff > 0 ? diff : 0;
 }
@@ -179,7 +175,6 @@ async function fetchLogs(dateStr) {
 }
 
 async function pushLogs(dateStr, data) {
-    // 保存時はローカル日時文字列（JST）で送信
     const serialized = data.map(l => ({
         ...l,
         start: toLocalDateTimeStr(l.start),
@@ -197,7 +192,7 @@ async function pushLogs(dateStr, data) {
 async function syncActiveTaskToCloud(task) {
     try {
         const payload = task ? {
-            method:   "setActiveTask",
+            method: "setActiveTask",
             task: {
                 category: task.category,
                 sub:      task.sub,
@@ -224,9 +219,10 @@ async function fetchActiveTaskFromCloud() {
 }
 
 async function pollActiveTask() {
+    // ① 今日のページを表示中のみ同期する
     if (selectedDate !== getJSTDateStr()) return;
-    const cloudTask = await fetchActiveTaskFromCloud();
 
+    const cloudTask = await fetchActiveTaskFromCloud();
     const cloudStartStr = cloudTask ? toLocalDateTimeStr(cloudTask.start) : null;
     const localStartStr = currentTask ? toLocalDateTimeStr(new Date(currentTask.start)) : null;
 
@@ -271,8 +267,8 @@ function updateDateVisuals() {
     document.getElementById("date-selector").value = selectedDate;
 
     const isToday = (selectedDate === getJSTDateStr());
-    document.getElementById("clock").style.display          = isToday ? "block" : "none";
-    document.getElementById("btn-go-today").style.display   = isToday ? "none"  : "block";
+    document.getElementById("clock").style.display            = isToday ? "block" : "none";
+    document.getElementById("btn-go-today").style.display     = isToday ? "none"  : "block";
     document.getElementById("active-task-card").style.display = isToday ? "block" : "none";
     const mc = document.getElementById("main-controls");
     if (mc) mc.style.display = isToday ? "block" : "none";
@@ -320,9 +316,9 @@ function showSubMenu(cat) {
 // 計測中カード
 // =========================================
 function renderActiveTask() {
-    const display     = document.getElementById("active-task-display");
-    const statusEl    = document.getElementById("active-status-label");
-    const recordArea  = document.getElementById("recording-only-area");
+    const display    = document.getElementById("active-task-display");
+    const statusEl   = document.getElementById("active-status-label");
+    const recordArea = document.getElementById("recording-only-area");
 
     if (!currentTask) {
         display.innerHTML = `<span style="color:#aaa; font-size:13px;">記録は停止しています</span>`;
@@ -381,13 +377,14 @@ function renderLogs() {
     }
 
     const sortedLogs = [...logs].sort((a, b) => {
-        const as = (a.start instanceof Date) ? a.start : new Date(a.start);
-        const bs = (b.start instanceof Date) ? b.start : new Date(b.start);
+        const as = (a.start instanceof Date) ? a.start : parseDateTime(String(a.start));
+        const bs = (b.start instanceof Date) ? b.start : parseDateTime(String(b.start));
         return bs - as;
     });
 
-    // 計測中タスクと直近ログのギャップ
-    if (currentTask && sortedLogs.length > 0) {
+    // ① 過去日では計測中ギャップ表示をしない
+    const isToday = (selectedDate === getJSTDateStr());
+    if (isToday && currentTask && sortedLogs.length > 0) {
         const latestLog = sortedLogs[0];
         const gapMs = new Date(currentTask.start).getTime() - new Date(latestLog.end).getTime();
         if (gapMs >= 60000) {
@@ -455,8 +452,8 @@ function renderLogs() {
         list.appendChild(wrapper);
 
         if (i < sortedLogs.length - 1) {
-            const nextL  = sortedLogs[i + 1];
-            const gapMs  = new Date(l.start).getTime() - new Date(nextL.end).getTime();
+            const nextL = sortedLogs[i + 1];
+            const gapMs = new Date(l.start).getTime() - new Date(nextL.end).getTime();
             if (gapMs >= 60000) {
                 const gapRow = document.createElement("div");
                 gapRow.className = "gap-add-row";
@@ -481,8 +478,8 @@ function drawTimeline() {
     logs.forEach(l => {
         const diff = getDurationMs(l.start, l.end);
         if (diff <= 0) return;
-        const startMs  = (l.start instanceof Date ? l.start : new Date(l.start)).getTime();
-        const endMs    = (l.end   instanceof Date ? l.end   : new Date(l.end)).getTime();
+        const startMs  = (l.start instanceof Date ? l.start : parseDateTime(String(l.start))).getTime();
+        const endMs    = (l.end   instanceof Date ? l.end   : parseDateTime(String(l.end))).getTime();
         const startMin = Math.max(0, (startMs - base.getTime()) / 60000);
         const endMin   = Math.min(1440, (endMs - base.getTime()) / 60000);
         if (startMin >= 1440 || endMin <= 0) return;
@@ -598,10 +595,10 @@ function toggleInlineEdit(idx) { openEditIndex = (openEditIndex === idx) ? -1 : 
 
 async function saveInlineEdit(idx) {
     showLoading();
-    const l      = logs[idx];
-    const newCat = document.getElementById(`edit-cat-${idx}`).value;
-    const newSub = document.getElementById(`edit-sub-${idx}`).value;
-    const newMemo= document.getElementById(`edit-memo-${idx}`).value;
+    const l       = logs[idx];
+    const newCat  = document.getElementById(`edit-cat-${idx}`).value;
+    const newSub  = document.getElementById(`edit-sub-${idx}`).value;
+    const newMemo = document.getElementById(`edit-memo-${idx}`).value;
     let sO = new Date(selectedDate + "T" + document.getElementById(`edit-start-${idx}`).value + ":00");
     let eO = new Date(selectedDate + "T" + document.getElementById(`edit-end-${idx}`).value   + ":00");
     if (eO <= sO) eO.setDate(eO.getDate() + 1);
@@ -808,7 +805,7 @@ window.onload = async () => {
         };
     });
 
-    // 日付セレクター（PC・iOS・Android全対応）
+    // ② 日付セレクター（PC・iOS・Android全対応）
     const dateSel = document.getElementById("date-selector");
     dateSel.value = selectedDate;
     dateSel.addEventListener("change", (e) => {
@@ -819,6 +816,22 @@ window.onload = async () => {
             else loadFromCloud();
         }
     });
+
+    // ② PC対応：wrapperクリックでinputをフォーカス／ピッカーを開く
+    const wrapper = document.getElementById("date-display-wrapper");
+    if (wrapper) {
+        wrapper.addEventListener("click", (e) => {
+            // input自体のクリックは二重発火しないようにする
+            if (e.target === dateSel) return;
+            // PC（showPickerが使える場合）
+            if (typeof dateSel.showPicker === "function") {
+                try { dateSel.showPicker(); } catch(err) { dateSel.focus(); }
+            } else {
+                dateSel.focus();
+                dateSel.click();
+            }
+        });
+    }
 
     document.getElementById("btn-go-today").onclick = () => {
         selectedDate = getJSTDateStr();

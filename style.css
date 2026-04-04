@@ -93,9 +93,8 @@ body {
     cursor: pointer;
     border: none;
     background: transparent;
-    /* iOSでもタップできるようにz-indexを上げる */
-    z-index: 10;
-    font-size: 16px; /* iOSのズーム防止 */
+    z-index: 1;        /* wrapperのclickが通るよう1に下げる */
+    font-size: 16px;
 }
 
 .header-time-area { height: 44px; display: flex; align-items: center; justify-content: center; }
