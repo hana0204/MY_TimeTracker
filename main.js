@@ -61,38 +61,32 @@ function parseLocalDate(dateStr) {
 function parseDateTime(str) {
     if (!str) return null;
     str = String(str).trim();
-    if (str.includes("T") && str.endsWith("Z")) {
-        return new Date(str);
-    }
+    if (str.includes("T") && str.endsWith("Z")) return new Date(str);
     const m = str.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):?(\d{2})?/);
-    if (m) {
-        return new Date(
-            Number(m[1]), Number(m[2]) - 1, Number(m[3]),
-            Number(m[4]), Number(m[5]), Number(m[6] || 0)
-        );
-    }
+    if (m) return new Date(Number(m[1]), Number(m[2])-1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]||0));
     return new Date(str);
 }
 
 function toLocalDateTimeStr(d) {
     if (!d) return "";
     const dt = (d instanceof Date) ? d : new Date(d);
+    if (isNaN(dt.getTime())) return "";
     const y  = dt.getFullYear();
-    const mo = String(dt.getMonth() + 1).padStart(2, '0');
-    const dy = String(dt.getDate()).padStart(2, '0');
-    const h  = String(dt.getHours()).padStart(2, '0');
-    const mi = String(dt.getMinutes()).padStart(2, '0');
-    const s  = String(dt.getSeconds()).padStart(2, '0');
+    const mo = String(dt.getMonth()+1).padStart(2,'0');
+    const dy = String(dt.getDate()).padStart(2,'0');
+    const h  = String(dt.getHours()).padStart(2,'0');
+    const mi = String(dt.getMinutes()).padStart(2,'0');
+    const s  = String(dt.getSeconds()).padStart(2,'0');
     return `${y}-${mo}-${dy} ${h}:${mi}:${s}`;
 }
 
 function fT(d, baseDateStr) {
     if (!d) return "00:00";
     const dt = (d instanceof Date) ? d : parseDateTime(String(d));
-    if (!dt) return "00:00";
-    const h  = String(dt.getHours()).padStart(2, '0');
-    const m  = String(dt.getMinutes()).padStart(2, '0');
-    if (baseDateStr && getJSTDateStr(dt) !== baseDateStr && dt.getHours() === 0 && dt.getMinutes() === 0) return "24:00";
+    if (!dt || isNaN(dt.getTime())) return "00:00";
+    const h = String(dt.getHours()).padStart(2,'0');
+    const m = String(dt.getMinutes()).padStart(2,'0');
+    if (baseDateStr && getJSTDateStr(dt) !== baseDateStr && dt.getHours()===0 && dt.getMinutes()===0) return "24:00";
     return `${h}:${m}`;
 }
 
@@ -100,9 +94,8 @@ function getDurationMs(start, end) {
     if (!start || !end) return 0;
     const s = (start instanceof Date) ? start : parseDateTime(String(start));
     const e = (end   instanceof Date) ? end   : parseDateTime(String(end));
-    if (!s || !e) return 0;
-    const diff = e.getTime() - s.getTime();
-    return diff > 0 ? diff : 0;
+    if (!s || !e || isNaN(s.getTime()) || isNaN(e.getTime())) return 0;
+    return Math.max(0, e.getTime() - s.getTime());
 }
 
 function formatDuration(ms) {
@@ -120,7 +113,7 @@ function addRipple(el, e) {
     const size = Math.max(rect.width, rect.height);
     const ripple = document.createElement("span");
     ripple.className = "ripple";
-    ripple.style.cssText = `width:${size}px;height:${size}px;left:${e.clientX - rect.left - size/2}px;top:${e.clientY - rect.top - size/2}px;`;
+    ripple.style.cssText = `width:${size}px;height:${size}px;left:${e.clientX-rect.left-size/2}px;top:${e.clientY-rect.top-size/2}px;`;
     el.appendChild(ripple);
     ripple.addEventListener("animationend", () => ripple.remove());
 }
@@ -150,11 +143,7 @@ function loadCache(dateStr) {
     try {
         const raw = localStorage.getItem(cacheKey(dateStr));
         if (!raw) return null;
-        return JSON.parse(raw).map(l => ({
-            ...l,
-            start: parseDateTime(l.start),
-            end:   parseDateTime(l.end)
-        }));
+        return JSON.parse(raw).map(l => ({ ...l, start: parseDateTime(l.start), end: parseDateTime(l.end) }));
     } catch(e) { return null; }
 }
 
@@ -162,33 +151,21 @@ async function fetchLogs(dateStr) {
     try {
         const res  = await fetch(GAS_URL, { method: "POST", body: JSON.stringify({ method: "load", date: dateStr }) });
         const data = await res.json();
-        const parsed = (data || []).map(l => ({
-            ...l,
-            start: parseDateTime(l.start),
-            end:   parseDateTime(l.end)
-        }));
+        const parsed = (data || []).map(l => ({ ...l, start: parseDateTime(l.start), end: parseDateTime(l.end) }));
         saveCache(dateStr, parsed);
         return parsed;
-    } catch(e) {
-        return loadCache(dateStr) || [];
-    }
+    } catch(e) { return loadCache(dateStr) || []; }
 }
 
+// pushLogs：フロント側でも重複排除してから保存
 async function pushLogs(dateStr, data) {
-    // フロント側でも重複排除
     const seen = new Set();
     const deduped = data.filter(l => {
-        const key = [
-            l.category,
-            l.sub,
-            toLocalDateTimeStr(l.start),
-            toLocalDateTimeStr(l.end)
-        ].join("|");
+        const key = [l.category, l.sub, toLocalDateTimeStr(l.start), toLocalDateTimeStr(l.end)].join("|");
         if (seen.has(key)) return false;
         seen.add(key);
         return true;
     });
-
     const serialized = deduped.map(l => ({
         ...l,
         start: toLocalDateTimeStr(l.start),
@@ -207,12 +184,7 @@ async function syncActiveTaskToCloud(task) {
     try {
         const payload = task ? {
             method: "setActiveTask",
-            task: {
-                category: task.category,
-                sub:      task.sub,
-                start:    toLocalDateTimeStr(task.start),
-                memo:     task.memo || ""
-            }
+            task: { category: task.category, sub: task.sub, start: toLocalDateTimeStr(task.start), memo: task.memo || "" }
         } : { method: "setActiveTask", task: null };
         await fetch(GAS_URL, { method: "POST", body: JSON.stringify(payload) });
     } catch(e) { console.error("syncActiveTask error", e); }
@@ -223,45 +195,37 @@ async function fetchActiveTaskFromCloud() {
         const res  = await fetch(GAS_URL, { method: "POST", body: JSON.stringify({ method: "getActiveTask" }) });
         const data = await res.json();
         if (!data || !data.category) return null;
-        return {
-            category: data.category,
-            sub:      data.sub,
-            start:    parseDateTime(data.start),
-            memo:     data.memo || ""
-        };
+        return { category: data.category, sub: data.sub, start: parseDateTime(data.start), memo: data.memo || "" };
     } catch(e) { return null; }
 }
 
+// ポーリング：他端末の変化を検知してUIのみ更新
+// 【重要】前のタスクの保存はしない（重複防止）
+// 切り替えた端末側がすでに保存済みなので、こちらは currentTask を上書きするだけ
 async function pollActiveTask() {
-    // ① 今日のページを表示中のみ同期する
     if (selectedDate !== getJSTDateStr()) return;
 
     const cloudTask = await fetchActiveTaskFromCloud();
     const cloudStartStr = cloudTask ? toLocalDateTimeStr(cloudTask.start) : null;
-    const localStartStr = currentTask ? toLocalDateTimeStr(new Date(currentTask.start)) : null;
 
+    // 変化なし → 何もしない
     if (cloudStartStr === lastSyncedTaskStart) return;
     lastSyncedTaskStart = cloudStartStr;
 
-    if (cloudTask && localStartStr !== cloudStartStr) {
-        if (currentTask) {
-            const snap = {
-                category: currentTask.category,
-                sub:      currentTask.sub,
-                memo:     (document.getElementById("memo-input") || {}).value || "",
-                start:    new Date(currentTask.start),
-                end:      new Date()
-            };
-            await _commitTask(snap);
-        }
+    if (cloudTask) {
+        // 他端末でタスクが切り替わった
+        // → ローカルのcurrentTaskをクラウドの値に上書きするだけ（保存はしない）
         currentTask = cloudTask;
         localStorage.setItem("currentTask", JSON.stringify({
             ...currentTask, start: toLocalDateTimeStr(currentTask.start)
         }));
         renderActiveTask();
+        // ログはクラウドから再取得して最新を表示
         logs = await fetchLogs(selectedDate);
         renderLogs();
-    } else if (!cloudTask && currentTask) {
+    } else {
+        // 他端末でタスクが終了した
+        // → ローカルのcurrentTaskをクリアするだけ（保存はしない）
         currentTask = null;
         localStorage.removeItem("currentTask");
         renderActiveTask();
@@ -276,10 +240,8 @@ async function pollActiveTask() {
 function updateDateVisuals() {
     const d    = parseLocalDate(selectedDate);
     const days = ["日","月","火","水","木","金","土"];
-    document.getElementById("date-text").innerText =
-        `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()} (${days[d.getDay()]})`;
+    document.getElementById("date-text").innerText = `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()} (${days[d.getDay()]})`;
     document.getElementById("date-selector").value = selectedDate;
-
     const isToday = (selectedDate === getJSTDateStr());
     document.getElementById("clock").style.display            = isToday ? "block" : "none";
     document.getElementById("btn-go-today").style.display     = isToday ? "none"  : "block";
@@ -333,7 +295,6 @@ function renderActiveTask() {
     const display    = document.getElementById("active-task-display");
     const statusEl   = document.getElementById("active-status-label");
     const recordArea = document.getElementById("recording-only-area");
-
     if (!currentTask) {
         display.innerHTML = `<span style="color:#aaa; font-size:13px;">記録は停止しています</span>`;
         statusEl.innerText = "● Stopped";
@@ -344,7 +305,6 @@ function renderActiveTask() {
     statusEl.innerText = "● Recording";
     statusEl.className = "active-status-dot recording";
     if (recordArea) recordArea.style.display = "block";
-
     const startTimeStr = fT(new Date(currentTask.start));
     display.innerHTML = `
         <div class="active-task-main">
@@ -380,12 +340,12 @@ function renderLogs() {
     const detailsArea = document.getElementById("daily-summary-details");
     if (detailsArea) {
         detailsArea.innerHTML = "";
-        Object.keys(dailyTotals).sort((a,b) => dailyTotals[b] - dailyTotals[a]).forEach(sub => {
+        Object.keys(dailyTotals).sort((a,b) => dailyTotals[b]-dailyTotals[a]).forEach(sub => {
             const darkColor = getDarkColorForSub(sub);
             const div = document.createElement("div");
             div.className = "summary-detail-item";
             div.style.setProperty("--item-color", darkColor);
-            div.innerHTML = `<span>${icons[sub] || ''} ${sub}</span><span style="color:#888;">${formatDuration(dailyTotals[sub])}</span>`;
+            div.innerHTML = `<span>${icons[sub]||''} ${sub}</span><span style="color:#888;">${formatDuration(dailyTotals[sub])}</span>`;
             detailsArea.appendChild(div);
         });
     }
@@ -396,7 +356,6 @@ function renderLogs() {
         return bs - as;
     });
 
-    // ① 過去日では計測中ギャップ表示をしない
     const isToday = (selectedDate === getJSTDateStr());
     if (isToday && currentTask && sortedLogs.length > 0) {
         const latestLog = sortedLogs[0];
@@ -405,7 +364,7 @@ function renderLogs() {
             const currentRow = document.createElement("div");
             currentRow.style.cssText = "padding:6px 0 2px; opacity:0.55;";
             currentRow.innerHTML = `
-                <span class="log-tag" style="background:${colors[currentTask.category] || '#eee'}">${icons[currentTask.sub] || ''} ${currentTask.sub}</span>
+                <span class="log-tag" style="background:${colors[currentTask.category]||'#eee'}">${icons[currentTask.sub]||''} ${currentTask.sub}</span>
                 <span style="font-size:12px; color:#999; margin-left:8px;">${fT(new Date(currentTask.start), selectedDate)}〜 計測中</span>
             `;
             list.appendChild(currentRow);
@@ -425,17 +384,15 @@ function renderLogs() {
         const diff = getDurationMs(l.start, l.end);
         const wrapper = document.createElement("div");
         wrapper.className = "log-item-wrapper";
-
         wrapper.innerHTML = `
             <div class="log-item" onclick="toggleInlineEdit(${idx})">
                 <div style="flex:1;">
-                    <span class="log-tag" style="background:${colors[l.category] || '#eee'}">${icons[l.sub] || ''} ${l.sub}</span>
+                    <span class="log-tag" style="background:${colors[l.category]||'#eee'}">${icons[l.sub]||''} ${l.sub}</span>
                     <span style="font-size:12px; color:#999; margin-left:8px;">${fT(new Date(l.start), selectedDate)}〜${fT(new Date(l.end), selectedDate)} (${formatDuration(diff)})</span>
                     ${l.memo ? `<div style="font-size:11px; color:#888; margin-top:2px;">${l.memo}</div>` : ''}
                 </div>
             </div>
         `;
-
         if (openEditIndex === idx) {
             const editPanel = document.createElement("div");
             editPanel.className = "inline-edit-panel";
@@ -448,7 +405,7 @@ function renderLogs() {
                     <input type="time" id="edit-start-${idx}" value="${fT(new Date(l.start))}">
                     <input type="time" id="edit-end-${idx}"   value="${fT(new Date(l.end))}">
                 </div>
-                <textarea class="edit-memo-input" id="edit-memo-${idx}" placeholder="メモを入力...">${l.memo || ''}</textarea>
+                <textarea class="edit-memo-input" id="edit-memo-${idx}" placeholder="メモを入力...">${l.memo||''}</textarea>
                 <div class="edit-btns">
                     <button class="btn-save-inline"   onclick="saveInlineEdit(${idx})">保存</button>
                     <button class="btn-delete-inline" onclick="deleteInlineEdit(${idx})">削除</button>
@@ -464,9 +421,8 @@ function renderLogs() {
             }, 0);
         }
         list.appendChild(wrapper);
-
         if (i < sortedLogs.length - 1) {
-            const nextL = sortedLogs[i + 1];
+            const nextL = sortedLogs[i+1];
             const gapMs = new Date(l.start).getTime() - new Date(nextL.end).getTime();
             if (gapMs >= 60000) {
                 const gapRow = document.createElement("div");
@@ -480,7 +436,6 @@ function renderLogs() {
             }
         }
     });
-
     drawTimeline();
 }
 
@@ -492,13 +447,13 @@ function drawTimeline() {
     logs.forEach(l => {
         const diff = getDurationMs(l.start, l.end);
         if (diff <= 0) return;
-        const startMs  = (l.start instanceof Date ? l.start : parseDateTime(String(l.start))).getTime();
-        const endMs    = (l.end   instanceof Date ? l.end   : parseDateTime(String(l.end))).getTime();
-        const startMin = Math.max(0, (startMs - base.getTime()) / 60000);
-        const endMin   = Math.min(1440, (endMs - base.getTime()) / 60000);
+        const sMs = (l.start instanceof Date ? l.start : parseDateTime(String(l.start))).getTime();
+        const eMs = (l.end   instanceof Date ? l.end   : parseDateTime(String(l.end))).getTime();
+        const startMin = Math.max(0, (sMs - base.getTime()) / 60000);
+        const endMin   = Math.min(1440, (eMs - base.getTime()) / 60000);
         if (startMin >= 1440 || endMin <= 0) return;
         const div = document.createElement("div");
-        div.className   = "segment";
+        div.className = "segment";
         div.style.left  = (startMin / 14.4) + "%";
         div.style.width = Math.max((endMin - startMin) / 14.4, 0.5) + "%";
         div.style.background = getMidColorForCat(l.category);
@@ -520,26 +475,36 @@ function addAtGap(s, e) {
 
 // =========================================
 // タスク操作
+// 【重要設計】
+// startTask() を呼んだ端末が「前タスクの終了保存」と「新タスクの開始」を
+// 両方担当する。他端末はポーリングでUIのみ更新する。
 // =========================================
 function startTask(cat, sub) {
+    const now = new Date();
+
     if (currentTask) {
+        // 前タスクを終了して保存（この端末のみが行う）
         const snap = {
             category: currentTask.category,
             sub:      currentTask.sub,
             memo:     (document.getElementById("memo-input") || {}).value || "",
             start:    new Date(currentTask.start),
-            end:      new Date()
+            end:      now
         };
-        _commitTask(snap);
+        _commitTask(snap); // 非同期だが待たずに進む（UIを止めない）
     }
-    currentTask = { category: cat, sub: sub, start: new Date(), memo: "" };
-    lastSyncedTaskStart = toLocalDateTimeStr(currentTask.start);
+
+    // 新タスクを設定
+    currentTask = { category: cat, sub: sub, start: now, memo: "" };
+    lastSyncedTaskStart = toLocalDateTimeStr(now);
     localStorage.setItem("currentTask", JSON.stringify({
-        ...currentTask, start: toLocalDateTimeStr(currentTask.start)
+        ...currentTask, start: toLocalDateTimeStr(now)
     }));
     if (document.getElementById("memo-input")) document.getElementById("memo-input").value = "";
     renderActiveTask();
     renderLogs();
+
+    // クラウドに新タスクを通知（他端末のポーリングが検知してUIを更新）
     syncActiveTaskToCloud(currentTask);
 }
 
@@ -550,11 +515,7 @@ async function _commitTask(task) {
         await saveTaskSplit(task);
     } else {
         const dayLogs = await fetchLogs(startStr);
-        dayLogs.push({
-            ...task,
-            start: new Date(task.start),
-            end:   new Date(task.end)
-        });
+        dayLogs.push({ ...task, start: new Date(task.start), end: new Date(task.end) });
         await pushLogs(startStr, dayLogs);
         if (startStr === selectedDate) {
             logs = await fetchLogs(selectedDate);
@@ -596,7 +557,9 @@ async function endTask() {
     localStorage.removeItem("currentTask");
     if (document.getElementById("memo-input")) document.getElementById("memo-input").value = "";
     renderActiveTask();
-    syncActiveTaskToCloud(null);
+
+    // クラウドの計測中状態を解除してから保存
+    await syncActiveTaskToCloud(null);
     await _commitTask(task);
     hideLoading();
     renderLogs();
@@ -616,7 +579,6 @@ async function saveInlineEdit(idx) {
     let sO = new Date(selectedDate + "T" + document.getElementById(`edit-start-${idx}`).value + ":00");
     let eO = new Date(selectedDate + "T" + document.getElementById(`edit-end-${idx}`).value   + ":00");
     if (eO <= sO) eO.setDate(eO.getDate() + 1);
-
     if (getJSTDateStr(sO) !== getJSTDateStr(eO)) {
         const boundary = parseLocalDate(getJSTDateStr(eO));
         logs[idx] = { category: newCat, sub: newSub, start: sO, end: boundary, memo: newMemo };
@@ -625,8 +587,7 @@ async function saveInlineEdit(idx) {
         nextLogs.push({ category: newCat, sub: newSub, start: boundary, end: eO, memo: newMemo });
         await pushLogs(getJSTDateStr(eO), nextLogs);
     } else {
-        l.category = newCat; l.sub = newSub; l.memo = newMemo;
-        l.start = sO; l.end = eO;
+        l.category = newCat; l.sub = newSub; l.memo = newMemo; l.start = sO; l.end = eO;
         await pushLogs(selectedDate, logs);
     }
     openEditIndex = -1;
@@ -683,7 +644,7 @@ function renderStatsChart(allLogs) {
         legend.innerHTML = `<div style="text-align:center;color:#aaa;font-size:12px;">データがありません</div>`;
         return;
     }
-    const sortedKeys = Object.keys(totals).sort((a,b) => totals[b] - totals[a]);
+    const sortedKeys = Object.keys(totals).sort((a,b) => totals[b]-totals[a]);
     let gradient = ""; let currentDeg = 0;
     const size = 180, cx = 90, cy = 90, r = 58;
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -696,21 +657,21 @@ function renderStatsChart(allLogs) {
         const color     = colors[catKey]     || "#eee";
         const darkColor = colorsDark[catKey] || "#bbb";
         if (ratio > 0.05) {
-            const midRad = ((currentDeg + deg / 2) - 90) * (Math.PI / 180);
+            const midRad = ((currentDeg + deg/2) - 90) * (Math.PI/180);
             const x = cx + r * Math.cos(midRad), y = cy + r * Math.sin(midRad);
             const t1 = document.createElementNS("http://www.w3.org/2000/svg", "text");
-            t1.setAttribute("x", x); t1.setAttribute("y", y - 7);
+            t1.setAttribute("x", x); t1.setAttribute("y", y-7);
             t1.setAttribute("text-anchor", "middle"); t1.setAttribute("dominant-baseline", "middle");
             t1.setAttribute("font-size", "13"); t1.textContent = icons[key] || icons[catKey] || '';
             svg.appendChild(t1);
             const t2 = document.createElementNS("http://www.w3.org/2000/svg", "text");
-            t2.setAttribute("x", x); t2.setAttribute("y", y + 9);
+            t2.setAttribute("x", x); t2.setAttribute("y", y+9);
             t2.setAttribute("text-anchor", "middle"); t2.setAttribute("dominant-baseline", "middle");
             t2.setAttribute("font-size", "9"); t2.setAttribute("font-weight", "700"); t2.setAttribute("fill", "#555");
             t2.textContent = `${Math.round(ratio*100)}%`;
             svg.appendChild(t2);
         }
-        gradient += `${color} ${currentDeg}deg ${currentDeg + deg}deg, `;
+        gradient += `${color} ${currentDeg}deg ${currentDeg+deg}deg, `;
         currentDeg += deg;
         const pct = Math.round(ratio * 100);
         const item = document.createElement("div");
@@ -719,7 +680,7 @@ function renderStatsChart(allLogs) {
             <div class="legend-item-top">
                 <div class="legend-item-label">
                     <span class="legend-color-box" style="background:${color}"></span>
-                    ${icons[key] || icons[catKey] || ''} ${key}
+                    ${icons[key]||icons[catKey]||''} ${key}
                 </div>
                 <div class="legend-item-right">${pct}%・${formatDuration(totals[key])}</div>
             </div>
@@ -730,7 +691,7 @@ function renderStatsChart(allLogs) {
         legend.appendChild(item);
     });
     pie.style.cssText = "width:180px;height:180px;border-radius:50%;position:relative;box-shadow:inset 0 4px 10px rgba(0,0,0,0.1);";
-    pie.style.background = `conic-gradient(${gradient.slice(0, -2)})`;
+    pie.style.background = `conic-gradient(${gradient.slice(0,-2)})`;
     pie.appendChild(svg);
 }
 
@@ -783,7 +744,6 @@ async function loadFromCloud() {
 // 初期化
 // =========================================
 window.onload = async () => {
-    // タイムライン目盛り
     const bar   = document.getElementById("bar");
     const scale = document.getElementById("timeline-scale");
     for (let h = 0; h <= 24; h++) {
@@ -795,7 +755,6 @@ window.onload = async () => {
         }
     }
 
-    // タブ
     document.getElementById("tab-record-btn").onclick = () => {
         document.getElementById('page-record').classList.add('active');
         document.getElementById('page-stats').classList.remove('active');
@@ -819,7 +778,6 @@ window.onload = async () => {
         };
     });
 
-    // ② 日付セレクター（PC・iOS・Android全対応）
     const dateSel = document.getElementById("date-selector");
     dateSel.value = selectedDate;
     dateSel.addEventListener("change", (e) => {
@@ -831,13 +789,10 @@ window.onload = async () => {
         }
     });
 
-    // ② PC対応：wrapperクリックでinputをフォーカス／ピッカーを開く
     const wrapper = document.getElementById("date-display-wrapper");
     if (wrapper) {
         wrapper.addEventListener("click", (e) => {
-            // input自体のクリックは二重発火しないようにする
             if (e.target === dateSel) return;
-            // PC（showPickerが使える場合）
             if (typeof dateSel.showPicker === "function") {
                 try { dateSel.showPicker(); } catch(err) { dateSel.focus(); }
             } else {
@@ -884,7 +839,6 @@ window.onload = async () => {
     renderActiveTask();
     await loadFromCloud();
 
-    // 時計・タイマー
     setInterval(() => {
         const now     = new Date();
         const clockEl = document.getElementById("clock");
@@ -899,6 +853,5 @@ window.onload = async () => {
         }
     }, 1000);
 
-    // クロスデバイス同期ポーリング
     setInterval(pollActiveTask, SYNC_INTERVAL_SEC * 1000);
 };
