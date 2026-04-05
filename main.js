@@ -175,12 +175,26 @@ async function fetchLogs(dateStr) {
 }
 
 async function pushLogs(dateStr, data) {
-    const serialized = data.map(l => ({
+    // フロント側でも重複排除
+    const seen = new Set();
+    const deduped = data.filter(l => {
+        const key = [
+            l.category,
+            l.sub,
+            toLocalDateTimeStr(l.start),
+            toLocalDateTimeStr(l.end)
+        ].join("|");
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+
+    const serialized = deduped.map(l => ({
         ...l,
         start: toLocalDateTimeStr(l.start),
         end:   toLocalDateTimeStr(l.end)
     }));
-    saveCache(dateStr, data);
+    saveCache(dateStr, deduped);
     try {
         await fetch(GAS_URL, { method: "POST", body: JSON.stringify({ method: "save", date: dateStr, data: serialized }) });
     } catch(e) { console.error("Push Logs Error", e); }
